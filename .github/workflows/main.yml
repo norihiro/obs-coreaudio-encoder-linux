@@ -1,0 +1,94 @@
+name: Plugin Build
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+    branches:
+      - main
+
+env:
+  artifactName: ${{ contains(github.ref_name, '/') && 'artifact' || github.ref_name }}
+  qt: false
+
+jobs:
+  linux_build:
+    runs-on: ${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        obs: [27, 28]
+        ubuntu: ['ubuntu-20.04']
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download obs-studio development environment
+        id: obsdeps
+        uses: norihiro/obs-studio-devel-action@v1-beta
+        with:
+          obs: ${{ matrix.obs }}
+          verbose: true
+          qt: ${{ env.qt }}
+
+      - name: Build plugin
+        run: |
+          OBS_QT_VERSION_MAJOR=${{ steps.obsdeps.outputs.OBS_QT_VERSION_MAJOR }}
+          mkdir build
+          cd build
+          case ${{ matrix.obs }} in
+            27)
+              cmake_opt=(
+                -D CMAKE_INSTALL_LIBDIR=/usr/lib/
+                -D CPACK_DEBIAN_PACKAGE_DEPENDS='obs-studio (>= 27), obs-studio (<< 28)'
+              )
+              ;;
+            28)
+              cmake_opt=(
+                -D CPACK_DEBIAN_PACKAGE_DEPENDS='obs-studio (>= 28)'
+              )
+              ;;
+          esac
+          cmake .. \
+            -D QT_VERSION=$OBS_QT_VERSION_MAJOR \
+            -D CMAKE_INSTALL_PREFIX=/usr \
+            -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+            -D LINUX_PORTABLE=OFF \
+            -D CPACK_DEBIAN_PACKAGE_SHLIBDEPS=ON \
+            -D PKG_SUFFIX=-obs${{ matrix.obs }}-${{ matrix.ubuntu }}-x86_64 \
+            "${cmake_opt[@]}"
+          make -j4
+          make package
+          echo "FILE_NAME=$(find $PWD -name '*.deb' | head -n 1)" >> $GITHUB_ENV
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.artifactName }}-linux-obs${{ matrix.obs }}-${{ matrix.ubuntu }}
+          path: '${{ env.FILE_NAME }}'
+      - name: Check package
+        run: |
+          . build/ci/ci_includes.generated.sh
+          set -ex
+          sudo apt install '${{ env.FILE_NAME }}'
+          case ${{ matrix.obs }} in
+            27) plugins_dir=/usr/lib/obs-plugins ;;
+            28) plugins_dir=/usr/lib/x86_64-linux-gnu/obs-plugins ;;
+          esac
+          ldd $plugins_dir/${PLUGIN_NAME}.so > ldd.out
+          if grep not.found ldd.out ; then
+            echo "Error: unresolved shared object." >&2
+            exit 1
+          fi
+          ls /usr/share/obs/obs-plugins/${PLUGIN_NAME}/
