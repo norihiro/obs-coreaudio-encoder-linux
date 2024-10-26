@@ -1,4 +1,4 @@
-# OBS CoreAudio Encoder Plugin for Linux
+# CoreAudio Encoder Plugin for OBS Studio on Linux
 
 ## Introduction
 
